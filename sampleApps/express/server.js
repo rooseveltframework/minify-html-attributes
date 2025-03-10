@@ -9,7 +9,8 @@ fs.copySync('browser.js', '.preprocessed_statics/browser.js') // copy css file t
 const editedFiles = require('../../minify-html-attributes')({
   htmlDir: './mvc/.preprocessed_views', // where your html files to process are located
   cssDir: './.preprocessed_statics', // where your css files to process are located
-  jsDir: './.preprocessed_statics' // where your js files to process are located
+  jsDir: './.preprocessed_statics', // where your js files to process are located
+  exemptNames: ['test-exemption']
 })
 
 // update any file that was postprocessed

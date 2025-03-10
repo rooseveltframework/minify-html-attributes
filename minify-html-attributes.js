@@ -72,11 +72,10 @@ function * generateMinifiedNames () {
 function minifyHtmlAttributes (params) {
   const minifiedNameGenerator = generateMinifiedNames() // create an instance of the name generator
   const nameMap = {} // store the mapping of original -> minified names
-  let attrsToRename = ['class', 'id', 'name'] // default attributes to rename (aside from data-* attrs)
+  let attrsToRename = ['class', 'id'] // default attributes to rename (aside from data-* attrs)
   if (params?.extraAttributes) for (const attr of params?.extraAttributes) attrsToRename.push(attr) // allow user to set additional ones
   if (params?.disableClassReplacements) attrsToRename = attrsToRename.filter(item => item !== 'class')
   if (params?.disableIdReplacements) attrsToRename = attrsToRename.filter(item => item !== 'id')
-  if (params?.disableNameReplacements) attrsToRename = attrsToRename.filter(item => item !== 'name')
 
   // replaces original names with their new names
   function replaceNames (content) {
@@ -95,6 +94,7 @@ function minifyHtmlAttributes (params) {
         if (attrsToRename.includes(attr) || (attr.startsWith('data-') && !params?.disableDataReplacements)) {
           const values = attributes[attr].split(' ')
           const newValues = values.map(value => {
+            if (params?.exemptNames.includes(value)) return value
             if (!nameMap[value]) {
               const minified = minifiedNameGenerator.next().value
               nameMap[value] = minified

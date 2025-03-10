@@ -167,6 +167,18 @@ describe('minify-html-attributes tests', function () {
     await browser.close()
   })
 
+  it('should skip renaming anything on the exemptions list', async function () {
+    const browser = await chromium.launch()
+    const page = await browser.newPage()
+    let consoleLogFound = false
+    page.on('console', msg => {
+      if (msg.text().includes('test exemption 1')) consoleLogFound = true
+    })
+    await page.goto('http://localhost:3000/')
+    assert(consoleLogFound, 'Expected console log not found')
+    await browser.close()
+  })
+
   it('should successfully update document.forms in the JS', async function () {
     const browser = await chromium.launch()
     const page = await browser.newPage()
