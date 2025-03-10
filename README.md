@@ -1,5 +1,4 @@
-minify-html-attributes
-#
+# minify-html-attributes
 
 [![Build Status](https://github.com/rooseveltframework/minify-html-attributes/workflows/CI/badge.svg
 )](https://github.com/rooseveltframework/minify-html-attributes/actions?query=workflow%3ACI) [![npm](https://img.shields.io/npm/v/minify-html-attributes.svg)](https://www.npmjs.com/package/minify-html-attributes)
