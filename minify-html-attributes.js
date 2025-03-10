@@ -94,7 +94,7 @@ function minifyHtmlAttributes (params) {
         if (attrsToRename.includes(attr) || (attr.startsWith('data-') && !params?.disableDataReplacements)) {
           const values = attributes[attr].split(' ')
           const newValues = values.map(value => {
-            if (params?.exemptNames.includes(value)) return value
+            if (params?.exemptNames?.includes(value)) return value
             if (!nameMap[value]) {
               const minified = minifiedNameGenerator.next().value
               nameMap[value] = minified

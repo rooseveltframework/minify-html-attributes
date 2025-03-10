@@ -8,7 +8,7 @@
       "url": "https://github.com/rooseveltframework/minify-html-attributes/graphs/contributors"
     }
   ],
-  "version": "1.0.1",
+  "version": "1.0.2",
   "homepage": "https://github.com/rooseveltframework/minify-html-attributes",
   "license": "CC-BY-4.0",
   "main": "minify-html-attributes.js",
