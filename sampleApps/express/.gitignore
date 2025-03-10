@@ -172,4 +172,5 @@ temp/
 
 .npm-cache
 .preprocessed_views
+.preprocessed_statics
 public

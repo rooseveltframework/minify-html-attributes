@@ -1,0 +1,17 @@
+<include src="layouts/main">
+  <arg pageContent>
+    <p>page with a form</p>
+    <form action="/pageWithForm" method="post" id="myform">
+      <dl>
+        <dt><label for="your_name">Your name:</label></dt>
+        <dd><input type="text" name="your_name" id="your_name" value=""></dd>
+        <dt><label for="story">Tell me a story:</label></dt>
+        <dd><textarea id="story" custom-attr="blah"></textarea></dd>
+      </dl>
+      <menu>
+        <li><button type="submit" name="button1">Button 1</button></li>
+        <li><button type="submit" name="button2">Button 2</button></li>
+      </menu>
+    </form>
+  </arg>
+</include>
