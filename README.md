@@ -139,7 +139,6 @@ Here's how to run the sample app:
   - Or `npm run sample`
   - Or `cd` into `sampleApps/express` and run `npm ci` and `npm start`
 - Go to [http://localhost:3000](http://localhost:3000)
-  - The page with the web component is located at http://localhost:3000/pageWithForm
 
 ## API
 
