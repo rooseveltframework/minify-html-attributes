@@ -22,6 +22,9 @@ if (document.querySelector('#ptests')) {
   const prefix = 'data-'
   const attribute = 'underline'
   console.log(document.querySelector(`[${prefix}${attribute}]`) ? 'dynamic construction 1' : '')
+
+  // test exemption
+  console.log(document.querySelector('#test-exemption') ? 'test exemption 1' : '')
 }
 
 if (document.querySelector('form')) {

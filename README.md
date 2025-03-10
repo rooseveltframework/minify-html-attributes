@@ -12,7 +12,7 @@ This module was built and is maintained by the [Roosevelt web framework](https:/
 ## Specific modifications
 
 - This module renames:
-  
+
   - `class` attribute values.
   - `id` attribute values.
   - `data-*` attribute names.
@@ -21,7 +21,7 @@ This module was built and is maintained by the [Roosevelt web framework](https:/
 The new names will be renamed to the shortest possible value, e.g. `a`, `b`, `c`, etc.
 
 - This module then updates:
-  
+
   - In HTML files:
     - Attributes that reference any IDs that have been renamed. Attributes that reference IDs are: `for`, `form`, `headers`, `itemref`, `list`, `usemap`, `aria-activedescendant`, `aria-controls`, `aria-describedby`, `aria-labelledby`, and `aria-owns`.
     - Inline CSS code in `<style>` tags that references any renamed attributes.
@@ -158,6 +158,7 @@ Here is a breakdown of all the available params:
 - `cssDir`: *[String]* Location where your source CSS files are. (Optional.)
 - `jsDir`: *[String]* Location where your source JS files are. (Optional.)
 - `extraAttributes`: *[Array]* Any additional HTML attributes you want to rename besides `class`, `id`, and `data-*`. Default `[]`.
+- `exemptNames`: *[Array]* Any names you want exempt from renaming. Default `[]`.
 - `disableClassReplacements`: *[Boolean]* Don't rename `class` attributes. Default: `false`.
 - `disableIdReplacements`: *[Boolean]* Don't rename `id` attributes. Default: `false`.
 - `disableDataReplacements`: *[Boolean]* Don't rename `data-*` attributes. Default: `false`.
@@ -165,7 +166,7 @@ Here is a breakdown of all the available params:
 The returned `editedFiles` object is structured as follows:
 
 - Key: the relative path of the file that was edited.
-  
+
   - `type`: One of the following values: `html`, `css`, or `js`.
-  
+
   - `contents`: The edited code.
