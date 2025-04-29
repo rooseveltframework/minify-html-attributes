@@ -1,9 +1,3 @@
-# Changelog
-
-## Next version
-
-- Put your changes here...
-
 ## 1.0.2
 
 - Fixed a crash caused by not populating the `exemptNames` param.
