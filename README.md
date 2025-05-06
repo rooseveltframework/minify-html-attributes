@@ -1,4 +1,4 @@
-[![npm](https://img.shields.io/npm/v/minify-html-attributes.svg)](https://www.npmjs.com/package/minify-html-attributes)
+💫 **minify-html-attributes** [![npm](https://img.shields.io/npm/v/minify-html-attributes.svg)](https://www.npmjs.com/package/minify-html-attributes)
 
 A Node.js module that will minify HTML attribute class names, IDs, and `data-*` attributes in a coordinated fashion across your HTML, CSS, and JS files. This is useful if you want to minify your code even more than standard minifiers do, or if you want to obfuscate your code and make it harder to read, reverse engineer, or repurpose.
 
