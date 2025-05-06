@@ -9,7 +9,7 @@
     }
   ],
   "version": "1.0.2",
-  "homepage": "https://github.com/rooseveltframework/minify-html-attributes",
+  "homepage": "https://rooseveltframework.org/docs/minify-html-attributes/latest",
   "license": "CC-BY-4.0",
   "main": "minify-html-attributes.js",
   "engines": {
