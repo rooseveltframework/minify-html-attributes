@@ -13,7 +13,7 @@
   "license": "CC-BY-4.0",
   "main": "minify-html-attributes.js",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "acorn": "8.14.1",
