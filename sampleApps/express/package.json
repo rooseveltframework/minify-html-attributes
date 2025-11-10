@@ -3,7 +3,7 @@
   "main": "server.js",
   "dependencies": {
     "express": "4.21.2",
-    "fs-extra": "11.3.0",
+    "fs-extra": "11.3.2",
     "teddy": "0.6.26",
     "webpack": "5.98.0"
   },
