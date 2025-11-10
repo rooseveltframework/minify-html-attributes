@@ -4,7 +4,7 @@
   "dependencies": {
     "express": "4.21.2",
     "fs-extra": "11.3.0",
-    "teddy": "0.6.26",
+    "teddy": "1.1.4",
     "webpack": "5.98.0"
   },
   "scripts": {
