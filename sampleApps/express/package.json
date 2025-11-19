@@ -5,7 +5,7 @@
     "express": "4.21.2",
     "fs-extra": "11.3.0",
     "teddy": "0.6.26",
-    "webpack": "5.98.0"
+    "webpack": "5.103.0"
   },
   "scripts": {
     "start": "node server.js"
