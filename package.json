@@ -8,13 +8,14 @@
       "url": "https://github.com/rooseveltframework/minify-html-attributes/graphs/contributors"
     }
   ],
-  "version": "1.1.0",
+  "version": "1.1.1",
   "homepage": "https://rooseveltframework.org/docs/minify-html-attributes/latest",
   "license": "CC-BY-4.0",
   "main": "minify-html-attributes.js",
   "files": [
     "minify-html-attributes.js",
-    "lib/"
+    "lib/",
+    "*.md"
   ],
   "engines": {
     "node": ">=22.0.0"

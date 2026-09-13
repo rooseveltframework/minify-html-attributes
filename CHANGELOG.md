@@ -1,3 +1,7 @@
+## 1.1.1
+
+- Fixed `CHANGELOG.md`, `CONFIGURATION.md`, and `USAGE.md` being omitted from the published npm package.
+
 ## 1.1.0
 
 - Breaking: Renamed the `extraAttributes` param to `renameAttributeValues`, since it renames the attribute's value rather than its name. Passing the old name now does nothing.
