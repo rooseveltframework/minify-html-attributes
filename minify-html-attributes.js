@@ -1,326 +1,201 @@
-const fs = require('fs')
-const path = require('path')
-const postcss = require('postcss')
-const cheerio = require('cheerio')
-const acorn = require('acorn')
-const estraverse = require('estraverse')
-const escodegen = require('escodegen')
+const fs = require('node:fs')
+const path = require('node:path')
+const { listFiles, readTextFile, hasExtension } = require('./lib/files')
+const { NameRegistry } = require('./lib/names')
+const { applyEdits } = require('./lib/edits')
+const { scanHtml } = require('./lib/html')
+const { scanStylesheet } = require('./lib/css')
+const { analyzeJs } = require('./lib/js')
 
-function loopThroughFilesSync (dir) {
-  let fileList = []
-  let files
-  try {
-    files = fs.readdirSync(dir, { withFileTypes: true })
-  } catch (err) {
-    return fileList
-  }
-  files.forEach(file => {
-    const filePath = path.join(dir, file.name)
-    if (file.isDirectory()) fileList = fileList.concat(loopThroughFilesSync(filePath)) // recurse dirs
-    else if (file.isFile() && !file.name.startsWith('.')) fileList.push(filePath) // exclude hidden files
-  })
-  return fileList
+const DEFAULT_CSS_EXTENSIONS = ['.css', '.less', '.scss']
+const DEFAULT_JS_EXTENSIONS = ['.js', '.mjs', '.cjs']
+
+// dialects where `//` starts a comment; in plain css it does not
+const LINE_COMMENT_EXTENSIONS = new Set(['.less', '.scss', '.sass'])
+
+// which namespace each reported token belongs to
+const NAMESPACES = {
+  class: 'class',
+  id: 'id',
+  idReference: 'id',
+  globalVariable: 'id',
+  data: 'data'
 }
 
-function isBinaryFile (filePath, bytesToCheck = 512) {
-  const buffer = Buffer.alloc(bytesToCheck)
-  const fd = fs.openSync(filePath, 'r')
-  const bytesRead = fs.readSync(fd, buffer, 0, bytesToCheck, 0)
-  fs.closeSync(fd)
-  for (let i = 0; i < bytesRead; i++) {
-    const byte = buffer[i]
-    if (byte === 0) return true // null byte found, likely a binary file
-    else if ((byte < 32 || byte > 126) && byte !== 10 && byte !== 13 && byte !== 9) return true // non-printable ascii character found, likely a binary file; allow common control characters: \n (10), \r (13), \t (9)
-  }
-  return false
+// tokens that merely point at a name defined elsewhere. these are renamed to follow whatever the definition became, but they never bring a new name into existence: an undeclared javascript variable is only an element id if some element really claims that id.
+const REFERENCE_ONLY_KINDS = new Set(['idReference', 'globalVariable'])
+
+function namespaceOf (token) {
+  if (token.kind === 'attrValue') return `attr:${token.attribute}`
+  return NAMESPACES[token.kind] ?? null
 }
 
-function toCamelCase (str) {
-  return str.replace(/-([a-z])/g, (match, letter) => letter.toUpperCase())
-}
+// minifies html attribute class names, ids, and data-* attribute names in a coordinated fashion across a set of html, css, and js files. takes the params documented in CONFIGURATION.md and returns a map of file path to { type, contents } for the files it changed.
+//
+// works in two passes: every file is analyzed first so that the complete set of names is known before any of them is assigned a replacement, then every file is rewritten by splicing replacements into the original text. nothing is ever re-serialized from a syntax tree, so formatting, comments, and template language syntax survive untouched.
+function minifyHtmlAttributes (params = {}) {
+  const warnings = []
+  const warn = message => {
+    warnings.push(message)
+    params.onWarning?.(message)
+  }
 
-// generator function to produce a sequence of unique, minified names sequentially
-function * generateMinifiedNames () {
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-  let length = 1
-  let index = 0
-  const usedNames = new Set()
+  const valueAttributes = new Set((params.renameAttributeValues ?? []).map(attribute => attribute.toLowerCase()))
+  const cssExtensions = (params.cssExtensions ?? DEFAULT_CSS_EXTENSIONS).map(extension => extension.toLowerCase())
+  const jsExtensions = (params.jsExtensions ?? DEFAULT_JS_EXTENSIONS).map(extension => extension.toLowerCase())
 
-  while (true) {
-    const maxIndex = Math.pow(chars.length, length)
-    if (index >= maxIndex) {
-      index = 0
-      length++
+  const disabledNamespaces = []
+  if (params.disableClassReplacements) disabledNamespaces.push('class')
+  if (params.disableIdReplacements) disabledNamespaces.push('id')
+  if (params.disableDataReplacements) disabledNamespaces.push('data')
+
+  // stylesheets outside cssDir are not ours to rewrite, so every name they define has to keep its original spelling on our side of the fence too
+  const exemptNames = new Set(params.exemptNames ?? [])
+  for (const name of namesInExternalStylesheets(params.exemptStylesheets, warn)) exemptNames.add(name)
+
+  const registry = new NameRegistry({ exemptNames: [...exemptNames], disabledNamespaces })
+
+  const scanOptions = {
+    valueAttributes,
+    disableClassReplacements: !!params.disableClassReplacements,
+    disableIdReplacements: !!params.disableIdReplacements,
+    disableDataReplacements: !!params.disableDataReplacements,
+    disableGlobalVariableReplacements: !!params.disableGlobalVariableReplacements,
+    warn,
+    scanHtml
+  }
+
+  // discovery
+
+  const files = new Map() // path -> { type, source }
+
+  function classify (filePath, type) {
+    if (files.has(filePath)) return
+    const source = readTextFile(filePath, { maxBytes: params.maxFileSize })
+    if (source === null) return // binary, unreadable, or oversized
+    files.set(filePath, { type, source })
+  }
+
+  // css and js are claimed by extension first so that a directory serving as both the html and the statics root does not get its stylesheets parsed as markup
+  for (const filePath of listFiles(params.cssDir)) if (hasExtension(filePath, cssExtensions)) classify(filePath, 'css')
+  for (const filePath of listFiles(params.jsDir)) if (hasExtension(filePath, jsExtensions)) classify(filePath, 'js')
+  for (const filePath of listFiles(params.htmlDir)) {
+    if (hasExtension(filePath, cssExtensions) || hasExtension(filePath, jsExtensions)) continue
+    if (params.htmlExtensions && !hasExtension(filePath, params.htmlExtensions)) continue
+    classify(filePath, 'html')
+  }
+
+  // analysis pass
+
+  const tokensByFile = new Map()
+
+  for (const [filePath, file] of files) {
+    const tokens = []
+    const collect = token => {
+      if (namespaceOf(token)) tokens.push(token)
     }
-
-    let name = ''
-    let temp = index
-    for (let j = 0; j < length; j++) {
-      name = chars[temp % chars.length] + name
-      temp = Math.floor(temp / chars.length)
+    try {
+      if (file.type === 'html') analyzeHtmlFile(file.source, collect, filePath)
+      else if (file.type === 'css') analyzeCssFile(file.source, collect, filePath)
+      else analyzeJsFile(file.source, collect)
+    } catch (error) {
+      warn(`${filePath} could not be parsed and was left alone: ${error.message}`)
+      continue
     }
-
-    if (!usedNames.has(name)) {
-      usedNames.add(name)
-      yield name
+    tokensByFile.set(filePath, tokens)
+    for (const token of tokens) {
+      if (!REFERENCE_ONLY_KINDS.has(token.kind)) registry.observe(namespaceOf(token), token.name)
     }
-
-    index++
-  }
-}
-
-function minifyHtmlAttributes (params) {
-  const minifiedNameGenerator = generateMinifiedNames() // create an instance of the name generator
-  const nameMap = {} // store the mapping of original -> minified names
-  let attrsToRename = ['class', 'id'] // default attributes to rename (aside from data-* attrs)
-  if (params?.extraAttributes) for (const attr of params?.extraAttributes) attrsToRename.push(attr) // allow user to set additional ones
-  if (params?.disableClassReplacements) attrsToRename = attrsToRename.filter(item => item !== 'class')
-  if (params?.disableIdReplacements) attrsToRename = attrsToRename.filter(item => item !== 'id')
-
-  // replaces original names with their new names
-  function replaceNames (content) {
-    for (const [original, minified] of Object.entries(nameMap)) {
-      const regex = new RegExp(`\\b${original}\\b`, 'g')
-      content = content.replace(regex, minified)
-    }
-    return content
   }
 
-  function processHtmlContent (html) {
-    const $ = cheerio.load(html, { xml: { xmlMode: false, lowerCaseAttributeNames: false, decodeEntities: false } })
-    $('*').each((i, el) => {
-      const attributes = $(el).attr()
-      for (const attr in attributes) {
-        if (attrsToRename.includes(attr) || (attr.startsWith('data-') && !params?.disableDataReplacements)) {
-          const values = attributes[attr].split(' ')
-          const newValues = values.map(value => {
-            if (params?.exemptNames?.includes(value)) return value
-            if (!nameMap[value]) {
-              const minified = minifiedNameGenerator.next().value
-              nameMap[value] = minified
-            }
-            return nameMap[value]
-          })
-          $(el).attr(attr, newValues.join(' '))
-        }
-      }
-    })
+  registry.assign()
 
-    // process inline css
-    $('style').each((i, el) => {
-      const css = $(el).html()
-      const result = processCssContent(css)
-      $(el).html(result)
-    })
+  // rewrite pass
 
-    // process inline js
-    $('script').each((i, el) => {
-      const js = $(el).html()
-      const result = processJsContent(js)
-      $(el).html(result)
-    })
-
-    // update ids for any element with these attributes to match the new names
-    const attributesToUpdate = ['aria-activedescendant', 'aria-controls', 'aria-describedby', 'aria-labelledby', 'aria-owns', 'for', 'form', 'headers', 'itemref', 'list', 'usemap']
-    $('*').each((i, el) => {
-      const attributes = $(el).attr()
-      for (const attr of attributesToUpdate) {
-        if (attributes[attr]) {
-          const values = attributes[attr].split(' ')
-          const newValues = values.map(value => nameMap[value] || value)
-          $(el).attr(attr, newValues.join(' '))
-        }
-      }
-    })
-
-    // process event handler attributes as inline js
-    const eventHandlerAttributesToUpdate = ['onabort', 'oncanplay', 'oncanplaythrough', 'onchange', 'onclick', 'oncontextmenu', 'oncopy', 'oncut', 'ondblclick', 'ondrag', 'ondragend', 'ondragenter', 'ondragexit', 'ondragleave', 'ondragover', 'ondragstart', 'ondrop', 'ondurationchange', 'onemptied', 'onended', 'onerror', 'onfocus', 'oninput', 'oninvalid', 'onkeydown', 'onkeypress', 'onkeyup', 'onload', 'onloadeddata', 'onloadedmetadata', 'onloadstart', 'onmousedown', 'onmouseenter', 'onmouseleave', 'onmousemove', 'onmouseout', 'onmouseover', 'onmouseup', 'onpaste', 'onpause', 'onplay', 'onplaying', 'onprogress', 'onratechange', 'onreset', 'onscroll', 'onseeked', 'onseeking', 'onselect', 'onshow', 'onsort', 'onstalled', 'onsubmit', 'onsuspend', 'ontimeupdate', 'ontoggle', 'onunload', 'onvolumechange', 'onwaiting', 'onwheel']
-    $('*').each((i, el) => {
-      const attributes = $(el).attr()
-      for (const attr of eventHandlerAttributesToUpdate) {
-        if (attributes[attr]) {
-          const js = attributes[attr]
-          const result = processJsContent(js)
-          $(el).attr(attr, result)
-        }
-      }
-    })
-
-    return $.html()
-  }
-
-  function processCssContent (css) {
-    const root = postcss.parse(css)
-
-    root.walkRules(rule => {
-      rule.selectors = rule.selectors.map(selector => {
-        return selector.replace(/\.([a-zA-Z0-9_-]+)/g, (match, className) => {
-          if (!nameMap[className]) {
-            const minified = minifiedNameGenerator.next().value
-            nameMap[className] = minified
-          }
-          return `.${nameMap[className]}`
-        }).replace(/#([a-zA-Z0-9_-]+)/g, (match, id) => {
-          if (!nameMap[id]) {
-            const minified = minifiedNameGenerator.next().value
-            nameMap[id] = minified
-          }
-          return `#${nameMap[id]}`
-        })
-      })
-    })
-
-    root.walkDecls(decl => {
-      if (decl.value.includes('attr(')) {
-        decl.value = replaceNames(decl.value)
-      }
-      if (decl.prop.startsWith('--')) {
-        decl.value = replaceNames(decl.value)
-      }
-    })
-
-    return root.toString()
-  }
-
-  function processJsContent (js) {
-    const ast = acorn.parse(js, { ecmaVersion: 2020 })
-
-    estraverse.replace(ast, {
-      enter (node) {
-        if (node.type === 'Literal' && typeof node.value === 'string') {
-          // check if the string contains html or css
-          if (node.value.trim().startsWith('<') && node.value.trim().endsWith('>')) {
-            node.value = processHtmlContent(node.value)
-          } else if (node.value.trim().includes('{') && node.value.trim().includes('}')) {
-            node.value = processCssContent(node.value)
-          } else {
-            node.value = replaceNames(node.value)
-          }
-        }
-        if (node.type === 'TemplateLiteral') {
-          node.quasis.forEach(quasi => {
-            if (quasi.value.raw.trim().startsWith('<') && quasi.value.raw.trim().endsWith('>')) {
-              quasi.value.raw = processHtmlContent(quasi.value.raw)
-              quasi.value.cooked = processHtmlContent(quasi.value.cooked)
-            } else if (quasi.value.raw.trim().includes('{') && quasi.value.raw.trim().includes('}')) {
-              quasi.value.raw = processCssContent(quasi.value.raw)
-              quasi.value.cooked = processCssContent(quasi.value.cooked)
-            } else {
-              quasi.value.raw = replaceNames(quasi.value.raw)
-              quasi.value.cooked = replaceNames(quasi.value.cooked)
-            }
-          })
-        }
-        if (node.type === 'BinaryExpression' && node.operator === '+') {
-          if (node.left.type === 'Literal' && typeof node.left.value === 'string') {
-            node.left.value = replaceNames(node.left.value)
-          }
-          if (node.right.type === 'Literal' && typeof node.right.value === 'string') {
-            node.right.value = replaceNames(node.right.value)
-          }
-        }
-        if (node.type === 'Identifier') {
-          const identifierName = node.name
-          if (nameMap[identifierName]) {
-            node.name = nameMap[identifierName]
-          }
-        }
-        if (node.type === 'MemberExpression' && node.property.type === 'Identifier') {
-          const propertyName = node.property.name
-          if (nameMap[propertyName]) {
-            node.property.name = nameMap[propertyName]
-          }
-        }
-        if (node.type === 'MemberExpression' && node.object.type === 'MemberExpression' && node.object.property.name === 'dataset') {
-          const dataAttrName = node.property.name
-          const originalAttrName = `data-${dataAttrName.replace(/([A-Z])/g, '-$1').toLowerCase()}`
-          if (nameMap[originalAttrName]) {
-            node.property.name = nameMap[originalAttrName]
-          }
-        }
-        if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && node.callee.property.name === 'querySelector') {
-          const arg = node.arguments[0]
-          if (arg && arg.type === 'Literal' && arg.value.includes('[') && arg.value.includes(']')) {
-            const attrName = arg.value.match(/\[([^\]]+)\]/)[1]
-            if (nameMap[attrName]) {
-              const minifiedAttrName = nameMap[attrName]
-              arg.value = arg.value.replace(attrName, minifiedAttrName)
-              const camelCaseAttrName = toCamelCase(minifiedAttrName.replace(/^data-/, ''))
-              if (node.parent && node.parent.type === 'MemberExpression' && node.parent.property.type === 'Identifier' && node.parent.property.name === attrName) {
-                node.parent.property.name = camelCaseAttrName
-              }
-            }
-          }
-        }
-      }
-    })
-
-    return escodegen.generate(ast)
-  }
-
-  const htmlFiles = []
-  const cssFiles = []
-  const jsFiles = []
   const editedFiles = {}
 
-  // gather list of potential html files to edit
-  const potentialHtmlFiles = loopThroughFilesSync(params?.htmlDir)
-  for (const file of potentialHtmlFiles) {
-    if (!isBinaryFile(file)) {
-      htmlFiles.push(file)
-    }
-  }
-
-  // gather list of potential css files to edit
-  const potentialCssFiles = loopThroughFilesSync(params?.cssDir)
-  for (const file of potentialCssFiles) {
-    if (!isBinaryFile(file) && file?.endsWith('.css')) {
-      cssFiles.push(file)
-    }
-  }
-
-  // gather list of potential js files to edit
-  const potentialJsFiles = loopThroughFilesSync(params?.jsDir)
-  for (const file of potentialJsFiles) {
-    if (!isBinaryFile(file) && file?.endsWith('.js')) {
-      jsFiles.push(file)
-    }
-  }
-
-  // process html files first to gather class, ID, and data-* mappings
-  for (const file of htmlFiles) {
-    const editedFile = processHtmlContent(fs.readFileSync(file, 'utf8'))
-    if (editedFile) {
-      editedFiles[file] = {
-        type: 'html',
-        contents: editedFile
+  for (const [filePath, file] of files) {
+    const tokens = tokensByFile.get(filePath)
+    if (!tokens?.length) continue
+    const edits = []
+    for (const token of tokens) {
+      const minified = registry.get(namespaceOf(token), token.name)
+      if (!minified) continue
+      // renaming an undeclared javascript variable must not collide with a name the file already binds
+      if (token.avoid?.has(minified)) {
+        warn(`${filePath}: could not rename the global "${token.name}" because "${minified}" is already used in that file`)
+        continue
       }
+      edits.push({ start: token.start, end: token.end, text: minified })
     }
+    const contents = applyEdits(file.source, edits)
+    if (contents !== file.source) editedFiles[filePath] = { type: file.type, contents }
   }
 
-  // process CSS files using the gathered mappings
-  for (const file of cssFiles) {
-    const editedFile = processCssContent(fs.readFileSync(file, 'utf8'))
-    if (editedFile) {
-      editedFiles[file] = {
-        type: 'css',
-        contents: editedFile
-      }
-    }
-  }
-
-  // process js files using the gathered mappings
-  for (const file of jsFiles) {
-    const editedFile = processJsContent(fs.readFileSync(file, 'utf8'))
-    if (editedFile) {
-      editedFiles[file] = {
-        type: 'js',
-        contents: editedFile
-      }
-    }
-  }
+  minifyHtmlAttributes.lastRun = { nameMap: registry.toJSON(), warnings, fileCount: files.size }
 
   return editedFiles
+
+  // analyzers
+
+  function analyzeHtmlFile (source, collect, filePath) {
+    scanHtml(source, collect, {
+      ...scanOptions,
+      onStyle: (css, offset) => scanStylesheet(css, shift(collect, offset), { ...scanOptions, lineComments: false }),
+      onScript: (js, offset) => analyzeEmbeddedJs(js, shift(collect, offset), `${filePath} (inline script)`),
+      onHtml: (html, offset) => scanHtml(html, shift(collect, offset), scanOptions),
+      onEventHandler: attribute => analyzeEventHandler(attribute, collect, filePath)
+    })
+  }
+
+  function analyzeCssFile (source, collect, filePath) {
+    scanStylesheet(source, collect, { ...scanOptions, lineComments: LINE_COMMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase()) })
+  }
+
+  function analyzeJsFile (source, collect) {
+    analyzeJs(source, collect, scanOptions)
+  }
+
+  function analyzeEmbeddedJs (source, collect, label) {
+    try {
+      analyzeJs(source, collect, scanOptions)
+    } catch (error) {
+      warn(`${label} could not be parsed and was left alone: ${error.message}`)
+    }
+  }
+
+  // inline event handlers hold javascript inside an html attribute value. the value is html-escaped, so it is only safe to edit in place when there are no entities to shift the offsets around.
+  function analyzeEventHandler (attribute, collect, filePath) {
+    if (attribute.value === null || !attribute.value.trim()) return
+    if (attribute.value.includes('&')) {
+      warn(`${filePath}: the ${attribute.name} handler contains html entities and was left alone`)
+      return
+    }
+    analyzeEmbeddedJs(attribute.value, shift(collect, attribute.valueStart), `${filePath} (${attribute.name} handler)`)
+  }
+}
+
+// collects every class and id defined by stylesheets the caller is not letting us edit, such as a vendored theme pulled in with `@import` from node_modules. renaming those names in the markup would leave the vendored rules pointing at elements that no longer exist.
+function namesInExternalStylesheets (paths, warn) {
+  const names = new Set()
+  for (const entry of paths ?? []) {
+    const files = fs.statSync(entry, { throwIfNoEntry: false })?.isDirectory() ? listFiles(entry) : [entry]
+    for (const filePath of files) {
+      const source = readTextFile(filePath)
+      if (source === null) {
+        warn(`the exempt stylesheet ${filePath} could not be read`)
+        continue
+      }
+      const lineComments = LINE_COMMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase())
+      scanStylesheet(source, token => names.add(token.name), { lineComments })
+    }
+  }
+  return names
+}
+
+// offsets every token a nested scan reports so it lands in the outer file
+function shift (collect, offset) {
+  return token => collect({ ...token, start: token.start + offset, end: token.end + offset })
 }
 
 module.exports = minifyHtmlAttributes

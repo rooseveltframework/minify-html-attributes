@@ -1,3 +1,5 @@
+const moduleWasLoaded = require('./makeThisRed.js')
+
 if (document.querySelector('#ptests')) {
   document.querySelector('.makeThisUnderlined').style.textDecoration = 'underline'
 
@@ -25,6 +27,31 @@ if (document.querySelector('#ptests')) {
 
   // test exemption
   console.log(document.querySelector('#test-exemption') ? 'test exemption 1' : '')
+
+  // classList
+  const underlined = document.querySelector('.makeThisUnderlined')
+  underlined.classList.add('addedByClassList')
+  console.log(underlined.classList.contains('addedByClassList') ? 'classList test' : '')
+
+  // className assignment, checked through the stylesheet
+  const classNameTarget = document.querySelector('#classNameTarget')
+  classNameTarget.className = 'appliedClassName'
+  console.log(window.getComputedStyle(classNameTarget).fontWeight === '700' ? 'className test' : '')
+
+  // markup inserted from js
+  document.querySelector('#ptests').insertAdjacentHTML('beforeend', '<p id="insertedElement" class="makeThisRed">inserted</p>')
+  console.log(document.querySelector('#insertedElement') ? 'insertAdjacentHTML test' : '')
+
+  // an in-page fragment link must still resolve to its target
+  const fragment = document.querySelector('#fragmentLink').getAttribute('href')
+  console.log(document.querySelector(fragment) === document.querySelector('#ptests') ? 'fragment link test' : '')
+
+  // strings that are not selectors must come through untouched
+  const notASelector = 'makeThisRed'
+  console.log(notASelector === 'makeThisRed' ? 'untouched string test' : '')
+
+  // and so must the module path this file requires, or webpack could not build
+  console.log(moduleWasLoaded() ? 'module path test' : '')
 }
 
 if (document.querySelector('form')) {

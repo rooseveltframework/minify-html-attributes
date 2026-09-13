@@ -5,3 +5,7 @@
 [data-underline] {
   text-decoration: underline;
 }
+
+.appliedClassName {
+  font-weight: bold;
+}

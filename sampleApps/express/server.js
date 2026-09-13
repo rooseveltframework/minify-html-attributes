@@ -3,7 +3,8 @@ const fs = require('fs-extra')
 // copy all source html, css, and js to locations that are safe for editing
 fs.copySync('mvc/views', 'mvc/.preprocessed_views') // copy unmodified html to a modified templates directory
 fs.copySync('styles.css', '.preprocessed_statics/styles.css') // copy css file to the public folder
-fs.copySync('browser.js', '.preprocessed_statics/browser.js') // copy css file to the public folder
+fs.copySync('browser.js', '.preprocessed_statics/browser.js') // copy js file to a location safe for editing
+fs.copySync('makeThisRed.js', '.preprocessed_statics/makeThisRed.js') // copy the required module too so webpack can resolve it
 
 // load minify-html-attributes
 const editedFiles = require('../../minify-html-attributes')({
@@ -57,7 +58,7 @@ compiler.run((err, stats) => {
     require('./mvc/routes')(app)
 
     // start express server
-    const port = 3000
+    const port = process.env.PORT ? Number(process.env.PORT) : 3000
     app.listen(port, () => {
       console.log(`🎧 express sample app server is running on http://localhost:${port}`)
     })
