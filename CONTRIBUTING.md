@@ -4,6 +4,7 @@
 
 - Be sure all tests pass: `npm t`.
 - Ensure good test coverage and write new tests if necessary: `npm run coverage`.
+- Be sure the linter is happy: `npm run lint`.
 - Add your changes to `CHANGELOG.md`.
 
 ## Release process
