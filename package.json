@@ -21,7 +21,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "acorn": "8.18.0"
+    "acorn": "8.19.0"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
