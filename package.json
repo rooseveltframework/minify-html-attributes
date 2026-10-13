@@ -24,7 +24,7 @@
     "acorn": "8.18.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.0",
     "standard": "17.1.2"
   },
   "standard": {
