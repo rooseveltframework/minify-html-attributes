@@ -28,7 +28,7 @@ The new names will be renamed to the shortest possible value, e.g. `a`, `b`, `c`
 - This module then updates:
 
   - In HTML files:
-    - Attributes that reference any IDs that have been renamed. Attributes that reference IDs are: `for`, `form`, `headers`, `itemref`, `list`, `usemap`, `aria-activedescendant`, `aria-controls`, `aria-describedby`, `aria-details`, `aria-errormessage`, `aria-flowto`, `aria-labelledby`, and `aria-owns`.
+    - Attributes that reference any IDs that have been renamed. Attributes that reference IDs are: `for` (a list of IDs on `<output>`), `form`, `headers`, `itemref`, `list`, `usemap`, `popovertarget`, `commandfor`, `interestfor`, `aria-activedescendant`, `aria-controls`, `aria-describedby`, `aria-details`, `aria-errormessage`, `aria-flowto`, `aria-labelledby`, `aria-owns`, and any you list in the `idReferenceAttributes` param, such as a library's `data-for`.
     - In-page fragment links, e.g. `<a href="#someId">`. Links that point anywhere else are left alone.
     - `<map name>`, so that `usemap` keeps pointing at the right image map.
     - Inline CSS code in `<style>` tags that references any renamed attributes.
@@ -57,9 +57,10 @@ The new names will be renamed to the shortest possible value, e.g. `a`, `b`, `c`
 
 The renames this module can make are limited to the references it can actually see. In particular:
 
-- **Names assembled at runtime cannot be followed.** If your code does `element.id = prefix + suffix` or your template writes `class="{someVariable}"`, this module has no way to know what the resulting name will be, so it leaves it alone. Values containing template syntax are skipped rather than guessed at.
+- **Names assembled at runtime cannot be followed.** If your code does `element.id = prefix + suffix` or your template writes `class="{someVariable}"`, this module has no way to know what the resulting name will be, so it leaves it alone. Values containing template syntax are skipped rather than guessed at. The same goes for a class attribute a template writes from inside another attribute. Both are reported through `onWarning` whenever any class is renamed, since a class they produce would no longer match a renamed one in your CSS or JS.
 - **JS strings are only rewritten where the context proves they are selectors.** A string that merely happens to match a class name like a module path, a cookie name, a sentence, a media query is left alone.
 - **Stylesheets outside your `cssDir` are not renamed.** If you `@import` a third party stylesheet from `node_modules`, the class names it defines cannot be renamed in it, while your HTML using those classes would be. Point the `exemptStylesheets` param at those files and every name they define is left alone on your side of the fence too.
+- **Scripts outside your `jsDir` are not renamed either.** A library bundled in from `node_modules` may look up its own class names or read `data-*` attributes from your markup, and it would stop finding them once your markup was renamed. Point the `exemptScripts` param at its files and every class, ID, and `data-*` name it uses is left alone.
 - **Preprocessor selectors built with `&` cannot be renamed.** In Less and Sass, `.block { &-element { … } }` produces a `.block-element` class that never appears literally in your source. This module warns when it sees this pattern and leaves the selector alone.
 - **Less and Sass mixins are left alone**, since `.mixin()` is a function call rather than a selector.
 - **Substring attribute selectors are left alone.** `[data-x^="foo"]` has to keep matching every value that starts with `foo`, and this module cannot know what those are. The attribute name is still renamed; the value is not.

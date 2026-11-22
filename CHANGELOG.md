@@ -1,3 +1,11 @@
+## 1.1.2
+
+- Added `exemptScripts` param, the counterpart of `exemptStylesheets` for scripts this module is not handed, such as a library bundled in from `node_modules`.
+- Added `idReferenceAttributes` param, for attributes whose value is an ID that a library defines. Their values are renamed along with the IDs they point at.
+- Added warnings for class values this module has to leave alone because a template builds them, such as `class="flash {type}"`, and for class attributes a template writes from inside another attribute. Either stops matching a renamed class in your CSS or JS without any error, so they are reported through `onWarning` whenever a class is renamed.
+- Fixed `popovertarget`, `commandfor`, and `interestfor` not following a renamed ID, which broke popovers and invoker buttons, and `<output for>` only following the first of the IDs it lists.
+- Updated dependencies.
+
 ## 1.1.1
 
 - Fixed `CHANGELOG.md`, `CONFIGURATION.md`, and `USAGE.md` being omitted from the published npm package.

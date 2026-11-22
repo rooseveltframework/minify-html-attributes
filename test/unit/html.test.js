@@ -90,6 +90,27 @@ describe('id references in html', () => {
     assert.equal(output, '<img usemap="#a"><map name="a"><area></map>')
   })
 
+  test('follows popovertarget, commandfor, and interestfor', () => {
+    const output = minifyHtml('<div id="menu" popover></div><button popovertarget="menu">a</button><button commandfor="menu" command="toggle-popover">b</button><a interestfor="menu">c</a>')
+    assert.equal(output, '<div id="a" popover></div><button popovertarget="a">a</button><button commandfor="a" command="toggle-popover">b</button><a interestfor="a">c</a>')
+  })
+
+  test('follows every id an output element lists in its for attribute', () => {
+    const output = minifyHtml('<input id="first"><input id="second"><output for="first second"></output>')
+    assert.equal(output, '<input id="a"><input id="b"><output for="a b"></output>')
+  })
+
+  test('follows the extra attributes named in idReferenceAttributes, including data attributes', () => {
+    // a library such as semantic-forms points a label at a group of fields with data-for, which the browser knows nothing about
+    const output = minifyHtml('<label data-for="choices">x</label><ul id="choices"></ul><p aria-thing="choices other"></p><i id="other"></i>', { idReferenceAttributes: ['data-for', 'aria-thing'], disableDataReplacements: true })
+    assert.equal(output, '<label data-for="a">x</label><ul id="a"></ul><p aria-thing="a b"></p><i id="b"></i>')
+  })
+
+  test('renames a data attribute named in idReferenceAttributes as well as following its value', () => {
+    const output = minifyHtml('<label data-for="choices">x</label><ul id="choices"></ul>', { idReferenceAttributes: ['data-for'] })
+    assert.equal(output, '<label data-a="a">x</label><ul id="a"></ul>')
+  })
+
   test('does not invent an id for a reference that has no target', () => {
     const source = '<label for="nothing">n</label>'
     assert.equal(minifyHtml(source), source)
