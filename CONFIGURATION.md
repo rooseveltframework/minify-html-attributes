@@ -33,6 +33,16 @@ The same directory may be given for more than one of these. Files are claimed by
   ```javascript
   exemptStylesheets: ['node_modules/some-css-framework/dist/framework.css']
   ```
+- `exemptScripts` *[Array of Strings]*: Paths to scripts, or directories of them, that this module is not allowed to edit. Typically a library bundled in from `node_modules` that looks up elements by class or ID, or reads `data-*` attributes from your markup. Every class, ID, and `data-*` name they use is added to `exemptNames`, so your markup keeps using the names they expect. Default `[]`.
+
+  ```javascript
+  exemptScripts: ['node_modules/some-ui-library/dist/library.js']
+  ```
+- `idReferenceAttributes` *[Array of Strings]*: Additional HTML attributes whose value is an ID, or a space-separated list of IDs, to be renamed along with the IDs they point at. Use it for attributes a library defines. A `data-*` attribute listed here still has its own name renamed unless that name is exempt or `disableDataReplacements` is set. Default `[]`.
+
+  ```javascript
+  idReferenceAttributes: ['data-for'] // <label data-for="choices"> follows <ul id="choices"> when it becomes <ul id="a">
+  ```
 - `disableClassReplacements` *[Boolean]*: Don't rename `class` attributes. Default: `false`.
 - `disableIdReplacements` *[Boolean]*: Don't rename `id` attributes. Default: `false`.
 - `disableDataReplacements` *[Boolean]*: Don't rename `data-*` attributes. Default: `false`.

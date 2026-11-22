@@ -259,3 +259,78 @@ describe('stylesheets we are not allowed to edit', () => {
     assert.ok(warnings.some(warning => warning.includes('could not be read')))
   })
 })
+
+describe('scripts we are not allowed to edit', () => {
+  // a library bundled in from node_modules is never handed to us, so the class names it looks up and the data attributes it reads from the markup have to keep their spelling
+  function vendorScript (source, extension = '.js') {
+    const file = path.join(os.tmpdir(), `mha-vendor-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`)
+    fs.writeFileSync(file, source)
+    return file
+  }
+
+  test('names used by an exempt script are left alone everywhere', () => {
+    const vendored = vendorScript("document.querySelectorAll('.libWidget').forEach(el => { el.dataset.maxRows; el.getAttribute('data-for'); document.getElementById('libRoot') })")
+    const { files, nameMap } = runOnFixture({
+      'html/page.html': '<div id="libRoot"><p class="libWidget ourClass" data-max-rows="3" data-for="x" data-ours="1"></p></div>',
+      'css/site.css': '.ourClass { color: green } [data-ours] { color: red }'
+    }, { exemptScripts: [vendored] })
+
+    const output = files['html/page.html']
+    assert.ok(output.includes('id="libRoot"'))
+    assert.ok(output.includes('class="libWidget '))
+    assert.ok(output.includes('data-max-rows="3"'))
+    assert.ok(output.includes('data-for="x"'))
+    assert.equal(nameMap.class.ourClass, 'a', 'the app\'s own names are still renamed')
+    assert.ok(nameMap.data.ours, 'the app\'s own data attributes are still renamed')
+    fs.rmSync(vendored)
+  })
+
+  test('a directory of exempt scripts is read recursively, and only its scripts', () => {
+    const vendorDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mha-vendor-'))
+    fs.mkdirSync(path.join(vendorDir, 'nested'))
+    fs.writeFileSync(path.join(vendorDir, 'nested', 'lib.mjs'), "document.querySelector('.libWidget')")
+    fs.writeFileSync(path.join(vendorDir, 'README.md'), 'not a script, with (((( broken syntax')
+
+    const { files, warnings } = runOnFixture({ 'html/page.html': '<p class="libWidget ourClass"></p>' }, { exemptScripts: [vendorDir] })
+    assert.equal(files['html/page.html'], '<p class="libWidget a"></p>')
+    assert.deepEqual(warnings, [])
+    fs.rmSync(vendorDir, { recursive: true, force: true })
+  })
+
+  test('an exempt script that cannot be read or parsed is reported', () => {
+    const broken = vendorScript('const a = ((((')
+    const { warnings } = runOnFixture({ 'html/page.html': '<p class="alpha"></p>' }, { exemptScripts: [path.join(os.tmpdir(), 'mha-missing.js'), broken] })
+    assert.ok(warnings.some(warning => warning.includes('mha-missing.js could not be read')))
+    assert.ok(warnings.some(warning => warning.includes('could not be parsed')))
+    fs.rmSync(broken)
+  })
+})
+
+describe('classes it cannot rename', () => {
+  test('reports class values built by template expressions, once per run', () => {
+    const { warnings } = runOnFixture({
+      'html/a.html': '<p class="flash {flash.type}"></p>',
+      'html/b.html': '<p class="flash {flash.type}"></p><p class="note <%= kind %>"></p>'
+    })
+    const reported = warnings.filter(warning => warning.includes('template expressions'))
+    assert.equal(reported.length, 1)
+    assert.ok(reported[0].includes('{flash.type}'))
+    assert.ok(reported[0].includes('a.html') && reported[0].includes('b.html'))
+  })
+
+  test('reports class attributes written inside other attributes', () => {
+    const { files, warnings } = runOnFixture({ 'html/page.html': '<li class="todo" if-done true=\'class="todo done"\'></li>' })
+    assert.ok(warnings.some(warning => warning.includes('inside other attributes') && warning.includes('true (')))
+    assert.ok(files['html/page.html'].includes('true=\'class="todo done"\''), 'what is inside is left exactly as written')
+  })
+
+  test('says nothing when no class was renamed, since nothing can stop matching', () => {
+    assert.deepEqual(runOnFixture({ 'html/page.html': '<p class="{dynamic}" if-x true=\'class="y"\'></p>' }).warnings, [])
+    assert.deepEqual(runOnFixture({ 'html/page.html': '<p class="alpha {dynamic}"></p>' }, { disableClassReplacements: true }).warnings, [])
+  })
+
+  test('does not mistake an inline event handler or a style for a class attribute', () => {
+    const { warnings } = runOnFixture({ 'html/page.html': '<p class="alpha" onclick="this.setAttribute(\'class\', \'x\'); var class = \'y\'" style="--class: \'z\'"></p>' })
+    assert.ok(!warnings.some(warning => warning.includes('inside other attributes')))
+  })
+})

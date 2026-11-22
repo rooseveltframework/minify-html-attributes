@@ -41,6 +41,7 @@ function minifyHtmlAttributes (params = {}) {
   }
 
   const valueAttributes = new Set((params.renameAttributeValues ?? []).map(attribute => attribute.toLowerCase()))
+  const idReferenceAttributes = new Set((params.idReferenceAttributes ?? []).map(attribute => attribute.toLowerCase()))
   const cssExtensions = (params.cssExtensions ?? DEFAULT_CSS_EXTENSIONS).map(extension => extension.toLowerCase())
   const jsExtensions = (params.jsExtensions ?? DEFAULT_JS_EXTENSIONS).map(extension => extension.toLowerCase())
 
@@ -53,10 +54,17 @@ function minifyHtmlAttributes (params = {}) {
   const exemptNames = new Set(params.exemptNames ?? [])
   for (const name of namesInExternalStylesheets(params.exemptStylesheets, warn)) exemptNames.add(name)
 
+  // the same goes for scripts outside jsDir, such as a library bundled in from node_modules: the names it looks for in the markup have to keep their spelling
+  for (const name of namesInExternalScripts(params.exemptScripts, jsExtensions, warn)) exemptNames.add(name)
+
   const registry = new NameRegistry({ exemptNames: [...exemptNames], disabledNamespaces })
+
+  // class values this run had to leave alone, so they can be reported together once the run is done. keyed by what was left alone, holding the files it was found in
+  const unrenamedClasses = { expression: new Map(), embedded: new Map() }
 
   const scanOptions = {
     valueAttributes,
+    idReferenceAttributes,
     disableClassReplacements: !!params.disableClassReplacements,
     disableIdReplacements: !!params.disableIdReplacements,
     disableDataReplacements: !!params.disableDataReplacements,
@@ -110,6 +118,13 @@ function minifyHtmlAttributes (params = {}) {
 
   registry.assign()
 
+  // a class a template produces at render time keeps its original spelling, so it only stops matching if the same name was renamed in the css or js. that cannot be known from here, so it is reported, but only when some class was actually renamed
+  if (Object.keys(registry.toJSON().class ?? {}).length) {
+    const describe = found => [...found].map(([text, files]) => `${text} (${[...files].join(', ')})`).join('; ')
+    if (unrenamedClasses.expression.size) warn(`class values built by template expressions were left as they are, so a class they produce will not match it if it was renamed in your css or js: ${describe(unrenamedClasses.expression)}. Add any class they can produce to exemptNames.`)
+    if (unrenamedClasses.embedded.size) warn(`class attributes written inside other attributes, such as a template's conditional attributes, were left as they are, so a class in them will not match it if it was renamed in your css or js. Found in: ${describe(unrenamedClasses.embedded)}. Add those classes to exemptNames, or apply that state some other way, such as a data-* attribute.`)
+  }
+
   // rewrite pass
 
   const editedFiles = {}
@@ -139,11 +154,17 @@ function minifyHtmlAttributes (params = {}) {
   // analyzers
 
   function analyzeHtmlFile (source, collect, filePath) {
+    const onUnrenamedClass = ({ kind, text }) => {
+      const files = unrenamedClasses[kind].get(text) ?? new Set()
+      files.add(filePath)
+      unrenamedClasses[kind].set(text, files)
+    }
     scanHtml(source, collect, {
       ...scanOptions,
+      onUnrenamedClass,
       onStyle: (css, offset) => scanStylesheet(css, shift(collect, offset), { ...scanOptions, lineComments: false }),
       onScript: (js, offset) => analyzeEmbeddedJs(js, shift(collect, offset), `${filePath} (inline script)`),
-      onHtml: (html, offset) => scanHtml(html, shift(collect, offset), scanOptions),
+      onHtml: (html, offset) => scanHtml(html, shift(collect, offset), { ...scanOptions, onUnrenamedClass }),
       onEventHandler: attribute => analyzeEventHandler(attribute, collect, filePath)
     })
   }
@@ -188,6 +209,27 @@ function namesInExternalStylesheets (paths, warn) {
       }
       const lineComments = LINE_COMMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase())
       scanStylesheet(source, token => names.add(token.name), { lineComments })
+    }
+  }
+  return names
+}
+
+// collects every class, id, and data-* name used by scripts the caller is not letting us edit, such as a library bundled in from node_modules that looks up elements by class or reads data-* attributes from the markup. renaming those names in the markup would leave the library looking for elements that no longer match.
+function namesInExternalScripts (paths, jsExtensions, warn) {
+  const names = new Set()
+  for (const entry of paths ?? []) {
+    const files = fs.statSync(entry, { throwIfNoEntry: false })?.isDirectory() ? listFiles(entry).filter(filePath => hasExtension(filePath, jsExtensions)) : [entry]
+    for (const filePath of files) {
+      const source = readTextFile(filePath)
+      if (source === null) {
+        warn(`the exempt script ${filePath} could not be read`)
+        continue
+      }
+      try {
+        analyzeJs(source, token => { if (token.kind === 'class' || token.kind === 'id' || token.kind === 'data') names.add(token.name) }, { scanHtml, warn () {} })
+      } catch (error) {
+        warn(`the exempt script ${filePath} could not be parsed, so the names it uses could not be kept: ${error.message}`)
+      }
     }
   }
   return names
