@@ -35,10 +35,12 @@ The new names will be renamed to the shortest possible value, e.g. `a`, `b`, `c`
     - Inline JS code in `<script>` tags that references any renamed attributes.
     - Markup in `<script type="text/template">` tags and similar.
     - Inline JS code in event handler attributes like `onclick`, `onmouseover`, etc that references any renamed attributes.
+    - SVG `url(#someId)` references in `fill`, `stroke`, `clip-path`, `mask`, `filter`, `marker-start`, `marker-mid`, `marker-end`, and `style` attributes.
   - In CSS files and inline CSS code:
     - Class and ID selectors, including inside functional pseudo-classes like `:not()`, `:is()`, and `:has()`.
     - Attribute selectors: `[data-*]` attribute names, and the values in `[class="…"]`, `[class~="…"]`, `[id="…"]`, and any `renameAttributeValues` attributes you configured.
     - Selectors reached through `@extend`.
+    - `url(#someId)` references to renamed IDs.
   - In JS files and inline JS code:
     - Selector strings passed to `querySelector`, `querySelectorAll`, `closest`, and `matches`.
     - `getElementById` and `getElementsByClassName` arguments.
@@ -53,6 +55,8 @@ The new names will be renamed to the shortest possible value, e.g. `a`, `b`, `c`
     - The implicit global variables browsers create for elements with an `id`.
     - Any of the above assembled out of template literals, string concatenation, or a variable holding a string literal.
 
+  JS only ever follows names your HTML or CSS defines. A name that only appears in JS is left alone.
+
 ### Caveats
 
 The renames this module can make are limited to the references it can actually see. In particular:
@@ -61,9 +65,9 @@ The renames this module can make are limited to the references it can actually s
 - **JS strings are only rewritten where the context proves they are selectors.** A string that merely happens to match a class name like a module path, a cookie name, a sentence, a media query is left alone.
 - **Stylesheets outside your `cssDir` are not renamed.** If you `@import` a third party stylesheet from `node_modules`, the class names it defines cannot be renamed in it, while your HTML using those classes would be. Point the `exemptStylesheets` param at those files and every name they define is left alone on your side of the fence too.
 - **Scripts outside your `jsDir` are not renamed either.** A library bundled in from `node_modules` may look up its own class names or read `data-*` attributes from your markup, and it would stop finding them once your markup was renamed. Point the `exemptScripts` param at its files and every class, ID, and `data-*` name it uses is left alone.
-- **Preprocessor selectors built with `&` cannot be renamed.** In Less and Sass, `.block { &-element { … } }` produces a `.block-element` class that never appears literally in your source. This module warns when it sees this pattern and leaves the selector alone.
-- **Less and Sass mixins are left alone**, since `.mixin()` is a function call rather than a selector.
-- **Substring attribute selectors are left alone.** `[data-x^="foo"]` has to keep matching every value that starts with `foo`, and this module cannot know what those are. The attribute name is still renamed; the value is not.
+- **Preprocessor selectors built with `&` or interpolation cannot be renamed.** In Less and Sass, `.block { &-element { … } }` produces a `.block-element` class that never appears literally in your source. This module warns when it sees this pattern and keeps both `block` and `block-element` at their original spelling. Interpolated names like `.icon-#{$name}` work the same way: every class starting with `icon-` keeps its spelling.
+- **Less and Sass mixins are left alone**, since `.mixin()` is a function call rather than a selector. A rule called as a mixin, like `.rounded;`, keeps its name everywhere.
+- **Substring attribute selectors are left alone.** `[data-x^="foo"]` has to keep matching every value that starts with `foo`, and this module cannot know what those are. The attribute name is still renamed; the value is not. For `class` and `id`, as in `[class^="col-"]`, every class or ID the selector matches keeps its spelling instead.
 - **The indented Sass syntax (`.sass`) is not supported**, only the braced dialects.
 
 When this module cannot safely rename something, it says so rather than guessing. Pass an `onWarning` callback to hear about it.

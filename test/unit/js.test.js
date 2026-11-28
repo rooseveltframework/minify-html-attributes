@@ -164,12 +164,12 @@ describe('javascript the minifier must not touch', () => {
     assert.equal(output, source.replace("add('beta')", "add('a')"))
   })
 
-  test('a global rename is skipped when it would collide with a local name', () => {
-    // `alpha` is the only id so it becomes `a`, but this file already binds `a`
-    const source = 'const a = 1\nconsole.log(alpha, a)'
-    const { js, warnings } = withPage(source)
-    assert.equal(js, source)
-    assert.ok(warnings.some(warning => warning.includes('already used')))
+  test('an id referenced as a global never takes a name the file already binds', () => {
+    // `alpha` is the only id so it would become `a`, but this file already binds `a`
+    const { js, html, warnings } = withPage('const a = 1\nconsole.log(alpha, a)')
+    assert.equal(js, 'const a = 1\nconsole.log(b, a)')
+    assert.match(html, /id="b"/)
+    assert.deepEqual(warnings, [])
   })
 })
 
