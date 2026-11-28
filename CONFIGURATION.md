@@ -28,7 +28,7 @@ The same directory may be given for more than one of these. Files are claimed by
   renameAttributeValues: ['custom-attr'] // <p custom-attr="someName"> becomes <p custom-attr="a">
   ```
 - `exemptNames` *[Array of Strings]*: Any names you want exempt from renaming. No other name will be given a replacement that collides with one of these. Default `[]`.
-- `exemptStylesheets` *[Array of Strings]*: Paths to stylesheets, or directories of them, that this module is not allowed to edit. Typically a dependency theme you pull in with `@import` from `node_modules`. Every class and ID they define is added to `exemptNames`, so your markup keeps using the names those stylesheets expect. Default `[]`.
+- `exemptStylesheets` *[Array of Strings]*: Paths to stylesheets, or directories of them, that this module is not allowed to edit. Typically a dependency theme you pull in with `@import` from `node_modules`. Every class and ID they define is added to `exemptNames`, as is every class and ID matched by a substring selector in them like `[class^="col-"]`, so your markup keeps using the names those stylesheets expect. Default `[]`.
 
   ```javascript
   exemptStylesheets: ['node_modules/some-css-framework/dist/framework.css']
@@ -46,16 +46,16 @@ The same directory may be given for more than one of these. Files are claimed by
 - `disableClassReplacements` *[Boolean]*: Don't rename `class` attributes. Default: `false`.
 - `disableIdReplacements` *[Boolean]*: Don't rename `id` attributes. Default: `false`.
 - `disableDataReplacements` *[Boolean]*: Don't rename `data-*` attributes. Default: `false`.
-- `disableGlobalVariableReplacements` *[Boolean]*: Don't rename the implicit global variables browsers create for elements with an `id`. Only undeclared identifiers that match a real element ID are ever renamed, but set this if your JS reads globals that are defined by a script this module cannot see. Default: `false`.
+- `disableGlobalVariableReplacements` *[Boolean]*: Don't rename the implicit global variables browsers create for elements with an `id`. Only undeclared identifiers that match a real element ID, and that no script this module can see declares or assigns as a global, are ever renamed. Set this if your JS reads globals that are defined by a script this module cannot see and have not listed in `exemptScripts`. Default: `false`.
 
 ### Which files get read
 
 - `htmlExtensions` *[Array of Strings]*: Only read files with these extensions in `htmlDir` as HTML. By default every text file in `htmlDir` is read as HTML, which suits template directories where the files may have no extension at all.
 - `cssExtensions` *[Array of Strings]*: Extensions to read as stylesheets. Default `['.css', '.less', '.scss']`.
 - `jsExtensions` *[Array of Strings]*: Extensions to read as JavaScript. Default `['.js', '.mjs', '.cjs']`.
-- `maxFileSize` *[Number]*: Skip files larger than this many bytes. Default `16777216` (16 MB).
+- `maxFileSize` *[Number]*: Skip files larger than this many bytes, with a warning. Default `16777216` (16 MB).
 
-Binary files, files that are not valid UTF-8, hidden files, and files inside hidden directories are always skipped.
+Binary files, files that are not valid UTF-8, hidden files, and files inside hidden directories are always skipped. Skipping a file that is not valid UTF-8, or a binary file in `cssDir` or `jsDir`, produces a warning, since its names would still be renamed everywhere else. Symbolic links to files and directories are followed.
 
 ### Reporting
 

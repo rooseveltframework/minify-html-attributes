@@ -5,7 +5,7 @@ const { NameRegistry } = require('./lib/names')
 const { applyEdits } = require('./lib/edits')
 const { scanHtml } = require('./lib/html')
 const { scanStylesheet } = require('./lib/css')
-const { analyzeJs } = require('./lib/js')
+const { analyzeJs, PROTECTED_GLOBALS, RESERVED_WORDS } = require('./lib/js')
 
 const DEFAULT_CSS_EXTENSIONS = ['.css', '.less', '.scss']
 const DEFAULT_JS_EXTENSIONS = ['.js', '.mjs', '.cjs']
@@ -20,6 +20,17 @@ const NAMESPACES = {
   idReference: 'id',
   globalVariable: 'id',
   data: 'data'
+}
+
+// names that keep their spelling because a selector matches them by part of their name, as in `[class^="col-"]`, or because a preprocessor builds them out of other names
+function matchesPattern (name, pattern) {
+  switch (pattern.match) {
+    case 'exact': return name === pattern.name
+    case 'prefix': return name.startsWith(pattern.name)
+    case 'suffix': return name.endsWith(pattern.name)
+    case 'contains': return name.includes(pattern.name)
+  }
+  return false
 }
 
 // tokens that merely point at a name defined elsewhere. these are renamed to follow whatever the definition became, but they never bring a new name into existence: an undeclared javascript variable is only an element id if some element really claims that id.
@@ -52,10 +63,21 @@ function minifyHtmlAttributes (params = {}) {
 
   // stylesheets outside cssDir are not ours to rewrite, so every name they define has to keep its original spelling on our side of the fence too
   const exemptNames = new Set(params.exemptNames ?? [])
-  for (const name of namesInExternalStylesheets(params.exemptStylesheets, warn)) exemptNames.add(name)
+  const patterns = [] // { namespace, match, name } for names that must keep their spelling, see matchesPattern
+  const external = namesInExternalStylesheets(params.exemptStylesheets, warn)
+  for (const name of external.names) exemptNames.add(name)
+  patterns.push(...external.patterns)
+
+  // every script on a page shares one set of globals, so these are gathered across every file: a global one script defines is never mistaken for an element id in another, and a renamed id never lands on a name that some script already reads
+  const scriptGlobals = new Set()
+  const scriptFreeNames = new Set()
+  const onScriptNames = ({ globals, free }) => {
+    for (const name of globals) scriptGlobals.add(name)
+    for (const name of free) scriptFreeNames.add(name)
+  }
 
   // the same goes for scripts outside jsDir, such as a library bundled in from node_modules: the names it looks for in the markup have to keep their spelling
-  for (const name of namesInExternalScripts(params.exemptScripts, jsExtensions, warn)) exemptNames.add(name)
+  for (const name of namesInExternalScripts(params.exemptScripts, jsExtensions, warn, onScriptNames)) exemptNames.add(name)
 
   const registry = new NameRegistry({ exemptNames: [...exemptNames], disabledNamespaces })
 
@@ -70,7 +92,8 @@ function minifyHtmlAttributes (params = {}) {
     disableDataReplacements: !!params.disableDataReplacements,
     disableGlobalVariableReplacements: !!params.disableGlobalVariableReplacements,
     warn,
-    scanHtml
+    scanHtml,
+    onScriptNames
   }
 
   // discovery
@@ -79,8 +102,13 @@ function minifyHtmlAttributes (params = {}) {
 
   function classify (filePath, type) {
     if (files.has(filePath)) return
-    const source = readTextFile(filePath, { maxBytes: params.maxFileSize })
-    if (source === null) return // binary, unreadable, or oversized
+    const onSkip = reason => {
+      // binary files are expected among html templates, such as images kept alongside them, but anything else that is skipped still has its names renamed everywhere else, so it has to be reported
+      if (reason === 'binary' && type === 'html') return
+      warn(`${filePath} was skipped because it is ${reason === 'too large' ? `larger than maxFileSize (${params.maxFileSize ?? 16 * 1024 * 1024} bytes)` : reason === 'not utf-8' ? 'not valid UTF-8' : reason}, so any class, id, or data-* name it uses may no longer match`)
+    }
+    const source = readTextFile(filePath, { maxBytes: params.maxFileSize, onSkip })
+    if (source === null) return
     files.set(filePath, { type, source })
   }
 
@@ -99,21 +127,55 @@ function minifyHtmlAttributes (params = {}) {
 
   for (const [filePath, file] of files) {
     const tokens = []
+    const filePatterns = []
     const collect = token => {
-      if (namespaceOf(token)) tokens.push(token)
+      if (token.kind === 'pattern') filePatterns.push(token)
+      else if (namespaceOf(token)) tokens.push(token)
     }
     try {
       if (file.type === 'html') analyzeHtmlFile(file.source, collect, filePath)
       else if (file.type === 'css') analyzeCssFile(file.source, collect, filePath)
       else analyzeJsFile(file.source, collect)
     } catch (error) {
-      warn(`${filePath} could not be parsed and was left alone: ${error.message}`)
+      warn(`${filePath} could not be parsed and was left alone, so any class, id, or data-* name it uses may no longer match: ${error.message}`)
       continue
     }
     tokensByFile.set(filePath, tokens)
+    patterns.push(...filePatterns)
     for (const token of tokens) {
-      if (!REFERENCE_ONLY_KINDS.has(token.kind)) registry.observe(namespaceOf(token), token.name)
+      // javascript only ever follows names: a string it happens to assign to some object's `id` is not proof that an element has that id, so only names that markup or a stylesheet defines are renamed
+      if (!REFERENCE_ONLY_KINDS.has(token.kind) && !token.referenceOnly) registry.observe(namespaceOf(token), token.name)
     }
+  }
+
+  // a name javascript uses still counts toward how short its replacement is, as long as markup or a stylesheet defines it
+  for (const tokens of tokensByFile.values()) {
+    for (const token of tokens) {
+      if (token.referenceOnly && !REFERENCE_ONLY_KINDS.has(token.kind)) registry.observe(namespaceOf(token), token.name, { onlyIfKnown: true })
+    }
+  }
+
+  // names a substring selector or a preprocessor depends on keep their spelling
+  for (const namespace of registry.namespaces.keys()) {
+    const namespacePatterns = patterns.filter(pattern => pattern.namespace === namespace)
+    if (!namespacePatterns.length) continue
+    for (const name of registry.observed(namespace)) {
+      if (namespacePatterns.some(pattern => matchesPattern(name, pattern))) registry.exclude(namespace, name)
+    }
+  }
+
+  // an undeclared variable that some script defines as a global is that global, not an element
+  for (const tokens of tokensByFile.values()) {
+    for (let index = tokens.length - 1; index >= 0; index--) {
+      if (tokens[index].kind === 'globalVariable' && scriptGlobals.has(tokens[index].name)) tokens.splice(index, 1)
+    }
+  }
+
+  // an id that a script refers to as a global variable becomes a variable name when it is renamed, so it must never take a reserved word, a name the browser already defines, or a name some script already uses
+  const idNames = new Set(registry.observed('id'))
+  registry.reserve('id', [...RESERVED_WORDS, ...PROTECTED_GLOBALS, ...scriptGlobals, ...scriptFreeNames])
+  for (const tokens of tokensByFile.values()) {
+    for (const token of tokens) if (token.kind === 'globalVariable' && idNames.has(token.name)) registry.reserve('id', token.fileBindings)
   }
 
   registry.assign()
@@ -136,12 +198,8 @@ function minifyHtmlAttributes (params = {}) {
     for (const token of tokens) {
       const minified = registry.get(namespaceOf(token), token.name)
       if (!minified) continue
-      // renaming an undeclared javascript variable must not collide with a name the file already binds
-      if (token.avoid?.has(minified)) {
-        warn(`${filePath}: could not rename the global "${token.name}" because "${minified}" is already used in that file`)
-        continue
-      }
-      edits.push({ start: token.start, end: token.end, text: minified })
+      // a shorthand property such as `{ foo }` is expanded so that only the variable is renamed, not the key
+      edits.push({ start: token.start, end: token.end, text: token.rewrite ? token.rewrite(minified) : minified })
     }
     const contents = applyEdits(file.source, edits)
     if (contents !== file.source) editedFiles[filePath] = { type: file.type, contents }
@@ -153,6 +211,11 @@ function minifyHtmlAttributes (params = {}) {
 
   // analyzers
 
+  // tokens found in javascript follow names that markup and stylesheets define, and never bring a new one into existence
+  function asReferences (collect) {
+    return token => collect({ ...token, referenceOnly: true })
+  }
+
   function analyzeHtmlFile (source, collect, filePath) {
     const onUnrenamedClass = ({ kind, text }) => {
       const files = unrenamedClasses[kind].get(text) ?? new Set()
@@ -163,9 +226,9 @@ function minifyHtmlAttributes (params = {}) {
       ...scanOptions,
       onUnrenamedClass,
       onStyle: (css, offset) => scanStylesheet(css, shift(collect, offset), { ...scanOptions, lineComments: false }),
-      onScript: (js, offset) => analyzeEmbeddedJs(js, shift(collect, offset), `${filePath} (inline script)`),
+      onScript: (js, offset) => analyzeEmbeddedJs(js, shift(asReferences(collect), offset), `${filePath} (inline script)`),
       onHtml: (html, offset) => scanHtml(html, shift(collect, offset), { ...scanOptions, onUnrenamedClass }),
-      onEventHandler: attribute => analyzeEventHandler(attribute, collect, filePath)
+      onEventHandler: attribute => analyzeEventHandler(attribute, asReferences(collect), filePath)
     })
   }
 
@@ -174,14 +237,14 @@ function minifyHtmlAttributes (params = {}) {
   }
 
   function analyzeJsFile (source, collect) {
-    analyzeJs(source, collect, scanOptions)
+    analyzeJs(source, asReferences(collect), scanOptions)
   }
 
   function analyzeEmbeddedJs (source, collect, label) {
     try {
       analyzeJs(source, collect, scanOptions)
     } catch (error) {
-      warn(`${label} could not be parsed and was left alone: ${error.message}`)
+      warn(`${label} could not be parsed and was left alone, so any class, id, or data-* name it uses may no longer match: ${error.message}`)
     }
   }
 
@@ -196,9 +259,10 @@ function minifyHtmlAttributes (params = {}) {
   }
 }
 
-// collects every class and id defined by stylesheets the caller is not letting us edit, such as a vendored theme pulled in with `@import` from node_modules. renaming those names in the markup would leave the vendored rules pointing at elements that no longer exist.
+// collects every class and id defined by stylesheets the caller is not letting us edit, such as a vendored theme pulled in with `@import` from node_modules. renaming those names in the markup would leave the vendored rules pointing at elements that no longer exist. substring selectors in them, like `[class^="col-"]`, are returned as patterns, since every name they match has to keep its spelling too.
 function namesInExternalStylesheets (paths, warn) {
   const names = new Set()
+  const patterns = []
   for (const entry of paths ?? []) {
     const files = fs.statSync(entry, { throwIfNoEntry: false })?.isDirectory() ? listFiles(entry) : [entry]
     for (const filePath of files) {
@@ -208,14 +272,17 @@ function namesInExternalStylesheets (paths, warn) {
         continue
       }
       const lineComments = LINE_COMMENT_EXTENSIONS.has(path.extname(filePath).toLowerCase())
-      scanStylesheet(source, token => names.add(token.name), { lineComments })
+      scanStylesheet(source, token => {
+        if (token.kind === 'pattern') patterns.push(token)
+        else names.add(token.name)
+      }, { lineComments })
     }
   }
-  return names
+  return { names, patterns }
 }
 
 // collects every class, id, and data-* name used by scripts the caller is not letting us edit, such as a library bundled in from node_modules that looks up elements by class or reads data-* attributes from the markup. renaming those names in the markup would leave the library looking for elements that no longer match.
-function namesInExternalScripts (paths, jsExtensions, warn) {
+function namesInExternalScripts (paths, jsExtensions, warn, onScriptNames) {
   const names = new Set()
   for (const entry of paths ?? []) {
     const files = fs.statSync(entry, { throwIfNoEntry: false })?.isDirectory() ? listFiles(entry).filter(filePath => hasExtension(filePath, jsExtensions)) : [entry]
@@ -226,7 +293,7 @@ function namesInExternalScripts (paths, jsExtensions, warn) {
         continue
       }
       try {
-        analyzeJs(source, token => { if (token.kind === 'class' || token.kind === 'id' || token.kind === 'data') names.add(token.name) }, { scanHtml, warn () {} })
+        analyzeJs(source, token => { if (token.kind === 'class' || token.kind === 'id' || token.kind === 'data') names.add(token.name) }, { scanHtml, warn () {}, onScriptNames })
       } catch (error) {
         warn(`the exempt script ${filePath} could not be parsed, so the names it uses could not be kept: ${error.message}`)
       }
